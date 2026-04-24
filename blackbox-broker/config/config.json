@@ -1,0 +1,59 @@
+{
+  "dbPath": "blackbox.db",
+  "httpPort": 8080,
+  "nodeDeadTimeoutSec": 3,
+  "anomalyCooldownSec": 5,
+  "groqApiKey": "YOUR_GROQ_API_KEY_HERE",
+  "groqModel": "llama3-8b-8192",
+  "serialPorts": [
+    {
+      "port": "/dev/ttyUSB0",
+      "baudRate": 9600,
+      "nodeId": "arduino-1",
+      "name": "Front Distance Sensor"
+    },
+    {
+      "port": "/dev/ttyUSB1",
+      "baudRate": 9600,
+      "nodeId": "arduino-2",
+      "name": "Tilt & IMU Sensor"
+    }
+  ],
+  "topics": [
+    {
+      "topicName": "/distance",
+      "unit": "cm",
+      "color": "#3b82f6",
+      "thresholdMin": 5.0,
+      "thresholdMax": 400.0
+    },
+    {
+      "topicName": "/tilt",
+      "unit": "degrees",
+      "color": "#f59e0b",
+      "thresholdMin": -45.0,
+      "thresholdMax": 45.0
+    },
+    {
+      "topicName": "/temperature",
+      "unit": "celsius",
+      "color": "#10b981",
+      "thresholdMin": -10.0,
+      "thresholdMax": 80.0
+    },
+    {
+      "topicName": "/battery",
+      "unit": "volts",
+      "color": "#8b5cf6",
+      "thresholdMin": 3.3,
+      "thresholdMax": 4.2
+    },
+    {
+      "topicName": "/cpu",
+      "unit": "percent",
+      "color": "#ec4899",
+      "thresholdMin": 0.0,
+      "thresholdMax": 90.0
+    }
+  ]
+}
