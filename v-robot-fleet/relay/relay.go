@@ -16,6 +16,7 @@ type Message struct {
 	NodeID string  `json:"nodeId"`
 	Topic  string  `json:"topic"`
 	Value  float64 `json:"value"`
+	Unit   string  `json:"unit,omitempty"`
 }
 
 // Hub maintains all client connections and broadcasts messages

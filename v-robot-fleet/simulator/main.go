@@ -17,21 +17,24 @@ type Message struct {
 	NodeID string  `json:"nodeId"`
 	Topic  string  `json:"topic"`
 	Value  float64 `json:"value"`
+	Unit   string  `json:"unit,omitempty"`
 }
 
 // Robot represents a warehouse robot
 type Robot struct {
-	ID           string
-	Role         string
-	Name         string
-	Status       string
-	Sensors      map[string]float64
-	BehaviorType string
-	CrashTime    time.Duration
-	StartTime    time.Time
-	RelayURL     string
-	mu           sync.Mutex
-	httpClient   *http.Client
+	ID             string
+	Role           string
+	Name           string
+	Status         string
+	Sensors        map[string]float64
+	Initial        map[string]float64
+	BehaviorType   string
+	CrashTime      time.Duration
+	StartTime      time.Time
+	RelayURL       string
+	CrashPublished bool
+	mu             sync.Mutex
+	httpClient     *http.Client
 }
 
 // SensorConfig defines sensor bounds
@@ -39,23 +42,24 @@ type SensorConfig struct {
 	Min   float64
 	Max   float64
 	Noise float64
+	Unit  string
 }
 
 var sensorConfigs = map[string]SensorConfig{
-	"proximity":      {Min: 0, Max: 200, Noise: 0.02},
-	"battery":        {Min: 0, Max: 100, Noise: 0.02},
-	"motor_temp":     {Min: 20, Max: 80, Noise: 0.02},
-	"speed":          {Min: 0, Max: 60, Noise: 0.02},
-	"vibration":      {Min: 0, Max: 100, Noise: 0.02},
-	"obstacle":       {Min: 0, Max: 1, Noise: 0},
-	"orientation":    {Min: -180, Max: 180, Noise: 0.02},
-	"path_deviation": {Min: 0, Max: 10, Noise: 0.02},
-	"load_weight":    {Min: 0, Max: 25, Noise: 0.02},
-	"axle_stress":    {Min: 0, Max: 100, Noise: 0.02},
-	"scan_accuracy":  {Min: 0, Max: 100, Noise: 0.02},
-	"arm_angle":      {Min: 0, Max: 90, Noise: 0.02},
-	"charge_rate":    {Min: 0, Max: 100, Noise: 0.02},
-	"eta_to_dock":    {Min: 0, Max: 300, Noise: 0.02},
+	"proximity":      {Min: 0, Max: 200, Noise: 0.02, Unit: "cm"},
+	"battery":        {Min: 0, Max: 100, Noise: 0.02, Unit: "%"},
+	"motor_temp":     {Min: 20, Max: 90, Noise: 0.02, Unit: "C"},
+	"speed":          {Min: 0, Max: 60, Noise: 0.02, Unit: "cm/s"},
+	"vibration":      {Min: 0, Max: 120, Noise: 0.02, Unit: "Hz"},
+	"obstacle":       {Min: 0, Max: 1, Noise: 0, Unit: "flag"},
+	"orientation":    {Min: -180, Max: 180, Noise: 0.02, Unit: "deg"},
+	"path_deviation": {Min: 0, Max: 30, Noise: 0.02, Unit: "cm"},
+	"load_weight":    {Min: 0, Max: 40, Noise: 0.02, Unit: "kg"},
+	"axle_stress":    {Min: 0, Max: 100, Noise: 0.02, Unit: "%"},
+	"scan_accuracy":  {Min: 0, Max: 100, Noise: 0.02, Unit: "%"},
+	"arm_angle":      {Min: 0, Max: 120, Noise: 0.02, Unit: "deg"},
+	"charge_rate":    {Min: 0, Max: 100, Noise: 0.02, Unit: "%"},
+	"eta_to_dock":    {Min: 0, Max: 300, Noise: 0.02, Unit: "s"},
 }
 
 func main() {
@@ -71,12 +75,14 @@ func main() {
 		robot.StartTime = startTime
 		robot.RelayURL = relayURL
 		robot.httpClient = &http.Client{Timeout: 5 * time.Second}
+		robot.Initial = cloneSensors(robot.Sensors)
 		fmt.Printf("   ✓ %s (%s)\n", robot.ID, robot.Name)
 		go robot.publishData()
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	fmt.Println("\n✨ All robots online and streaming sensor data...\n")
+	go startControlServer(robots)
+	fmt.Println("\n✨ All robots online and streaming sensor data...")
 	select {}
 }
 
@@ -114,18 +120,27 @@ func (r *Robot) publishData() {
 		r.updateSensors(elapsed)
 
 		if r.Status == "OFFLINE" {
+			if !r.CrashPublished {
+				r.publishAllSensors()
+				r.CrashPublished = true
+			}
 			continue
 		}
 
-		for sensorName, value := range r.Sensors {
-			topic := fmt.Sprintf("%s.%s", r.ID, sensorName)
-			msg := Message{
-				NodeID: r.ID,
-				Topic:  topic,
-				Value:  value,
-			}
-			r.publishMessage(msg)
+		r.publishAllSensors()
+	}
+}
+
+func (r *Robot) publishAllSensors() {
+	for sensorName, value := range r.Sensors {
+		cfg := sensorConfigs[sensorName]
+		msg := Message{
+			NodeID: r.ID,
+			Topic:  sensorName,
+			Value:  value,
+			Unit:   cfg.Unit,
 		}
+		r.publishMessage(msg)
 	}
 }
 
@@ -285,9 +300,96 @@ func (r *Robot) updateCrashPattern4(elapsed time.Duration) {
 
 func (r *Robot) crashRobot() {
 	r.Status = "OFFLINE"
+	r.CrashPublished = false
 	for key := range r.Sensors {
 		r.Sensors[key] = 0
 	}
+}
+
+func (r *Robot) recoverRobot() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.Status = "ONLINE"
+	r.BehaviorType = "stable"
+	r.StartTime = time.Now()
+	r.CrashPublished = false
+	for key, value := range r.Initial {
+		r.Sensors[key] = value
+	}
+}
+
+func cloneSensors(input map[string]float64) map[string]float64 {
+	output := make(map[string]float64, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func startControlServer(robots []*Robot) {
+	byID := map[string]*Robot{}
+	for _, robot := range robots {
+		byID[robot.ID] = robot
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/robots", func(w http.ResponseWriter, r *http.Request) {
+		writeCORS(w)
+		if r.Method == http.MethodOptions {
+			return
+		}
+		type robotView struct {
+			ID     string `json:"id"`
+			Name   string `json:"name"`
+			Role   string `json:"role"`
+			Status string `json:"status"`
+		}
+		result := []robotView{}
+		for _, robot := range robots {
+			result = append(result, robotView{ID: robot.ID, Name: robot.Name, Role: robot.Role, Status: robot.Status})
+		}
+		json.NewEncoder(w).Encode(result)
+	})
+	mux.HandleFunc("/crash", func(w http.ResponseWriter, r *http.Request) {
+		writeCORS(w)
+		if r.Method == http.MethodOptions {
+			return
+		}
+		robot := byID[r.URL.Query().Get("nodeId")]
+		if robot == nil {
+			http.Error(w, "robot not found", http.StatusNotFound)
+			return
+		}
+		robot.mu.Lock()
+		robot.crashRobot()
+		robot.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]string{"status": "crashed", "nodeId": robot.ID})
+	})
+	mux.HandleFunc("/recover", func(w http.ResponseWriter, r *http.Request) {
+		writeCORS(w)
+		if r.Method == http.MethodOptions {
+			return
+		}
+		robot := byID[r.URL.Query().Get("nodeId")]
+		if robot == nil {
+			http.Error(w, "robot not found", http.StatusNotFound)
+			return
+		}
+		robot.recoverRobot()
+		json.NewEncoder(w).Encode(map[string]string{"status": "online", "nodeId": robot.ID})
+	})
+
+	fmt.Println("   Control: http://localhost:9100")
+	if err := http.ListenAndServe(":9100", mux); err != nil {
+		fmt.Printf("control server error: %v\n", err)
+	}
+}
+
+func writeCORS(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
 }
 
 func (r *Robot) clampSensor(name string) {
